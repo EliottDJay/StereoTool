@@ -1,0 +1,4 @@
+FlyingThings3D/frames_finalpass/TRAIN/C/0740/left/0014.png FlyingThings3D/frames_finalpass/TRAIN/C/0740/right/0014.png FlyingThings3D/disparity/TRAIN/C/0740/left/0014.pfm
+FlyingThings3D/frames_finalpass/TRAIN/B/0437/left/0009.png FlyingThings3D/frames_finalpass/TRAIN/B/0437/right/0009.png FlyingThings3D/disparity/TRAIN/B/0437/left/0009.pfm
+Monkaa/frames_finalpass/lonetree_augmented1_x2/left/0195.png Monkaa/frames_finalpass/lonetree_augmented1_x2/right/0195.png Monkaa/disparity/lonetree_augmented1_x2/left/0195.pfm
+Driving/frames_finalpass/15mm_focallength/scene_backwards/fast/left/0199.png Driving/frames_finalpass/15mm_focallength/scene_backwards/fast/right/0199.png Driving/disparity/15mm_focallength/scene_backwards/fast/left/0199.pfm

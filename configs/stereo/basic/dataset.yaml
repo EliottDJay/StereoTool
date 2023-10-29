@@ -1,0 +1,39 @@
+kitti_2012:
+  'train': 'filenames/KITTI_2012_train.txt',
+  'train_all': 'filenames/KITTI_2012_train_all.txt',
+  'val': 'filenames/KITTI_2012_val.txt',
+  'test': 'filenames/KITTI_2012_test.txt'
+
+kitti_2015_dict:
+  'train': 'filenames/KITTI_2015_train.txt',
+  'train_all': 'filenames/KITTI_2015_train_all.txt',
+  'val': 'filenames/KITTI_2015_val.txt',
+  'test': 'filenames/KITTI_2015_test.txt'
+
+acv_kitti_2015_dict:
+  'train': 'filenames/ACV_KITTI_15_train.txt',
+  'train_all': 'filenames/KITTI_2015_train_all.txt',
+  'val': 'filenames/ACV_KITTI_15_val.txt',
+
+acv_kitti_2012_dict:
+  'train': 'filenames/ACV_KITTI_12_train.txt',
+  'train_all': 'filenames/KITTI_2012_train_all.txt',
+  'val': 'filenames/ACV_KITTI_12_val.txt',
+
+kitti_mix_dict:
+  'train': 'filenames/KITTI_mix.txt',
+  'test': 'filenames/KITTI_2015_test.txt'
+
+acv_kitti_mix15_dict:
+  'train': 'filenames/ACV_KITTI_12_15_train.txt',
+  'val': 'filenames/ACV_KITTI_15_val.txt'
+
+acv_kitti_mix12_dict:
+  'train': 'filenames/ACV_KITTI_12_15_train.txt',
+  'val': 'filenames/ACV_KITTI_12_val.txt'
+
+# SceneFlow: /data/data2/drj/dataset/SceneFlow/
+# KITTI2012: /data/data2/drj/dataset/KITTI/kitti_mix/kitti_2012/data_stereo_flow/
+# KITTI2015: /data/data2/drj/dataset/KITTI/kitti_mix/kitti_2015/data_scene_flow/
+# KITTI_mix: /data/data2/drj/dataset/KITTI/kitti_mix/   ACV_KITTI_mix15
+# SCARED： /data/data2/drj/dataset/SCARED_keyframes/  /SCARED_keyframes_alpha_1

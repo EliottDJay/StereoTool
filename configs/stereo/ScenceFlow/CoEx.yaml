@@ -1,0 +1,101 @@
+dataset: # Required.
+  type: SceneFlow
+  max_disparity: 192  # scene flow and KITTI set 192, SCARED 320
+  mode: val  # val/noval/test
+  mean: [ 0.485, 0.456, 0.406 ]
+  std: [ 0.229, 0.224, 0.225 ]
+  workers: 8
+  train:
+    batch_size: 48
+    dataroot: /data/data2/drj/dataset/SceneFlow/
+    data_list: ../../../../dataloader/stereo_dataset/StereoList/AANet/SceneFlow_finalpass_train.txt
+    pseudo_gt: False
+    scale_factor: None  # for SCARED it is 128. which is different from the KITTI dataset
+    shuffle : True
+    pin_memory : True
+    drop_last : True
+    crop :
+      height : 256
+      width : 512
+    color :
+      p : 0.5  #possibility for color
+      contrast:
+        p_op : 0.5  # possibility to conduct the operation
+        p_diff : 0.5  # possibility to conduct different transform to left and right image
+      gamma :
+        p_op: 0.5  # possibility to conduct the operation
+        p_diff: 0.5  # possibility to conduct different transform to left and right image
+      brightness:
+        p_op: 0.5  # possibility to conduct the operation
+        p_diff: 0.5  # possibility to conduct different transform to left and right image
+      hue:
+        p_op: 0.5  # possibility to conduct the operation
+        p_diff: 0.5  # possibility to conduct different transform to left and right image
+      saturation:
+        p_op: 0.5  # possibility to conduct the operation
+        p_diff: 0.5  # possibility to conduct different transform to left and right image
+    occlude: True
+    vflip:
+      p : 0.2
+  val:
+    batch_size: 48
+    dataroot: /data/data2/drj/dataset/SceneFlow/
+    data_list: ../../../../dataloader/stereo_dataset/StereoList/AANet/SceneFlow_finalpass_test.txt
+    save_filename: False
+    scale_factor: None
+    shuffle: False
+    pin_memory: True
+    drop_last: False
+    crop:
+      height: 576
+      width: 960
+  test:
+    batch_size : 1
+    dataroot: /data/data2/drj/dataset/SceneFlow/
+    data_list: ../../../../dataloader/stereo_dataset/StereoList/AANet/SceneFlow_finalpass_test.txt
+    save_filename: False
+    scale_factor: None
+    shuffle: False
+    pin_memory: True
+    drop_last: False
+    crop:
+      height: 576
+      width: 960
+
+
+trainer: # Required.
+  epochs: 54
+  eval_on: True
+  optimizer:
+    type: Adam  # SGD Adam AdamW
+    kwargs:
+      lr: 0.001
+      betas: (0.9, 0.999)
+      weight_decay: 0.0001
+  lr_scheduler:
+    mode: multistep
+    metric: epoch
+    kwargs:
+      milestones: [20,32,40,48]
+      gamma: 0.5
+
+net: # Required.
+  sync_bn: True
+  backbone:
+    type: mobilenetv2_100
+    channels: [16,24,32,96,160]
+    layers: [1,2,3,5,6]
+    pretrained: True
+  volume1:
+    feature_similarity: groupcorrelation
+    group: 1
+  refinement:
+    type: spixel
+    spxc: [32, 48]
+
+loss:
+  type: basicdisp
+  weight: [1, 1, 1, 1]
+  highest_only: False
+  pseudo_gt: False
+
