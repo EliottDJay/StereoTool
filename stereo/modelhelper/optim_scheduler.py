@@ -32,6 +32,36 @@ class WarmupCosineSchedule(LambdaLR):
         return max(0.0, 0.5 * (1. + math.cos(math.pi * float(self.cycles) * 2.0 * progress)))
 
 
+class LearningRateAdjust(LambdaLR):
+    """ Linear warmup and then cosine decay.
+        Linearly increases learning rate from 0 to 1 over `warmup_steps` training steps.
+        Decreases learning rate from 1. to 0. over remaining `t_total - warmup_steps` steps following a cosine curve.
+        If `cycles` (default=0.5) is different from default, learning rate follows cosine function after warmup.
+    """
+    def __init__(self, optimizer, base_lr, lrepochs, warmup_steps=None, last_epoch=-1):
+        self.base_lr = base_lr
+        splits = lrepochs.split(':')
+        assert len(splits) == 2  # 前面是epoch 后面是变化率
+        self.downscale_epochs = [int(eid_str) for eid_str in splits[0].split(',')]
+        self.downscale_rate = [float(eid_str) for eid_str in splits[1].split(',')]
+        self.wamup_steps = warmup_steps
+        super(LearningRateAdjust, self).__init__(optimizer, self.lr_lambda, last_epoch=last_epoch)
+
+    def lr_lambda(self, step):
+        if self.wamup_steps:
+            # 这里还没写
+            if step < self.wamup_steps:
+                return float(step) / float(max(1.0, self.warmup_steps))
+        # progress after warmup
+        lr = self.base_lr
+        for eid, downscale_rate in zip(self.downscale_epochs, self.downscale_rate):
+            if step >= eid:
+                lr /= downscale_rate
+            else:
+                break
+        # print("setting learning rate to {}".format(lr))
+        return lr
+
 def get_optimizer(parms, cfg_trainer):
     # Get the optimizer
     cfg_optim = cfg_trainer["optimizer"]
@@ -70,6 +100,8 @@ def get_scheduler(cfg_trainer, optimizer, len_data, last):
         else:
             Log.error('lr_scheduler.MultiStepLR cant update following iter updating but the epoch!')
             exit(1)
+    elif policy =="learningrateadjust":
+        scheduler = LearningRateAdjust(optimizer, **lr_kwargs, last_epoch=last)
     elif policy == 'lambda_poly':
         if metric == 'iter':
             power = lr_kwargs.get('power', 0.9)

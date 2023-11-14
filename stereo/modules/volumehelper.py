@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+from stereo.modules.submodule import SpatialTransformer_grid
 from utils.logger import Logger as Log
 
 def groupwise_correlation(fea1, fea2, num_groups):
@@ -38,6 +39,18 @@ class ConcatVolume(nn.Module):
                 volume[:, C:, i, :, :] = right_feature
         volume = volume.contiguous()
         return volume
+
+
+class SparseConcatVolume(nn.Module):
+    def __init__(self, cfg):
+        super(SparseConcatVolume, self).__init__()
+
+    def forward(self, left_feature, right_feature, coarse_disparity, max_disp=None):
+        right_feature_map, left_feature_map = SpatialTransformer_grid(left_feature,
+                                                                      right_feature, coarse_disparity)
+        concat_volume = torch.cat((left_feature_map, right_feature_map), dim=1)
+        return concat_volume
+
 
 class CorVolume(nn.Module):
     """
@@ -147,7 +160,7 @@ class DiffVolume(nn.Module):
         b, c, h, w = left_feature.size()
         volume = left_feature.new_zeros(b, c, max_disp, h, w)
 
-        for i in range(self.max_disp):
+        for i in range(max_disp):
             if i > 0:
                 volume[:, :, i, :, i:] = left_feature[:, :, :, i:] - right_feature[:, :, :, :-i]
             else:
@@ -155,6 +168,30 @@ class DiffVolume(nn.Module):
 
         volume = volume.contiguous()
         return volume
+
+
+class DiffVolumeV2(nn.Module):
+    # in https://github.com/zjjMaiMai/TinyHITNet
+    def __init__(self, cfg):
+        super(DiffVolumeV2, self).__init__()
+        # self.group = cfg.get('group')  # group
+
+    def forward(self, left_feature, right_feature, max_disp=None):
+
+        d_range = torch.arange(max_disp, device=left_feature.device)
+        d_range = d_range.view(1, 1, -1, 1, 1)
+
+        x_index = torch.arange(left_feature.size(3), device=left_feature.device)
+        x_index = x_index.view(1, 1, 1, 1, -1)
+
+        x_index = torch.clip(4 * x_index - d_range + 1, 0, right_feature.size(3) - 1).repeat(
+            right_feature.size(0), right_feature.size(1), 1, right_feature.size(2), 1
+        )
+        right = torch.gather(
+            right_feature.unsqueeze(2).repeat(1, 1, max_disp, 1, 1), dim=-1, index=x_index
+        )
+
+        return left_feature.unsqueeze(2) - right
 
 
 class VolumeHelper(nn.Module):

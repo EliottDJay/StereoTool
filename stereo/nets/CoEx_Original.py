@@ -16,7 +16,6 @@ from stereo.modules.spixel import upfeat
 
 class CoEx_Original(nn.Module):
     def __init__(self, args):
-        # https://blog.csdn.net/dongjinkun/article/details/117232330
         super(CoEx_Original, self).__init__()
         # self.cfg = args
         self.name = "CoEx_Original"
@@ -99,7 +98,7 @@ class CoEx_Original(nn.Module):
         volume = self.aggregation(fl, volume)
 
         # spx
-        xspx = self.spx_4x(fr[0])
+        xspx = self.spx_4x(fl[0])
         xspx = self.spx_2x(xspx, spxfl_x2)
         spx_pred = self.spx(xspx)
         spx_pred = F.softmax(spx_pred, 1)

@@ -52,8 +52,22 @@ def isNum(n):
 
 
 def count_parameters(model):
-    num = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    return num
+    num_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    num = sum(p.numel() for p in model.parameters())
+    return num_trainable, num
+
+
+def np2torch(x, t=True, bgr=False):
+    if len(x.shape) == 2:
+        x = x[..., None]
+    if bgr:
+        x = x[..., [2, 1, 0]]
+    if t:
+        x = np.transpose(x, (2, 0, 1))
+    if x.dtype == np.uint8:
+        x = x.astype(np.float32) / 255
+    x = torch.from_numpy(x.copy())
+    return x
 
 
 def input2bool(v):

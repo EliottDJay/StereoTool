@@ -19,7 +19,7 @@ sys.path.append(abspath)
 from utils import utils
 from utils.average_meter import AverageMeter
 from utils.logger import Logger as Log
-from utils.distributed import setup_distributed, is_distributed
+from utils.distributed import setup_distributed, is_distributed, all_reduce_mean, get_world_size, get_rank
 from utils.stereo_utils.stereo_visualization import save_images, disp_error_img
 from utils.stereo_utils.stereo_metrics import d1_metric, thres_metric
 
@@ -101,8 +101,8 @@ def parse_args():
     # ***********  Extra para related to training mode  **********
     parser.add_argument('--evaluate_only', default=False, help='Only evaluate pretrained models')
     parser.add_argument('--freeze_bn', default=False, help='Switch BN to eval mode to fix running statistics')
-    parser.add_argument('--print_freq', default=1000, type=int, help='Print frequency to screen (iterations)')
-    parser.add_argument('--summary_freq', default=1000, type=int,
+    parser.add_argument('--print_freq', default=100, type=int, help='Print frequency to screen (iterations)')
+    parser.add_argument('--summary_freq', default=100, type=int,
                         help='Summary frequency to tensorboard (iterations)')
     parser.add_argument('--save_ckpt_freq', default=1, type=int,
                         help='Save checkpoint frequency (epochs)')  # For SenceFlow 1
@@ -126,6 +126,8 @@ def parse_args():
         gpulist = [int(i.strip()) for i in gpu1]
         parser_new["gpu"] = gpulist
 
+    if parser_new["seed"] is not None:
+        os.environ['PYTHONHASHSEED'] = str(parser_new["seed"])  # 为了禁止hash随机化，使得实验可复现
 
     return parser_new
 
@@ -166,21 +168,31 @@ def main():
     utils.check_path(summary_path)
     args["log_file"] = os.path.join(exp_path, 'log', "stereo" + current_time + ".log")
 
-    if args["distributed"]:
-        rank, word_size = setup_distributed(port=args["port"])
-    else:
-        rank, word_size = 0, 1
-
     cudnn.enabled = True
     cudnn.benchmark = True
+
+    rank = get_rank()
+
     if args["seed"] is not None:
+        # https://pytorch.org/docs/stable/notes/randomness.html
+        # https://blog.csdn.net/qq_42714262/article/details/121722064
         random.seed(args["seed"])
         np.random.seed(args["seed"])
         torch.manual_seed(args["seed"])
+        torch.cuda.manual_seed(args["seed"])
         torch.cuda.manual_seed_all(args["seed"])
     if args['deterministic']:
+        # os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':4096:8'  # 在cuda 10.2及以上的版本中，需要设置以下环境变量来保证cuda的结果可复现
+        # torch.use_deterministic_algorithms(True)  # 一些操作使用了原子操作，不是确定性算法，不能保证可复现，设置这个禁用原子操作，保证使用确定性算法
+        # RuntimeError: upsample_bilinear2d_backward_out_cuda does not have a deterministic implementation,
+        # but you set 'torch.use_deterministic_algorithms(True)'. You can turn off determinism just for this operation,
+        # or you can use the 'warn_only=True' option, if that's acceptable for your application.
+        # You can also file an issue at https://github.com/pytorch/pytorch/issues to help us prioritize adding deterministic support for this operation.
         cudnn.deterministic = True
-        cudnn.benchmark = False
+        torch.backends.cudnn.enabled = False  # 禁用cudnn使用非确定性算法
+        cudnn.benchmark = False  # 与上面一条代码配套使用，True的话会自动寻找最适合当前配置的高效算法，来达到优化运行效率的问题。False保证实验结果可复现。
+
+    # torch.autograd.set_detect_anomaly(True)
 
     if rank == 0:
         Log.init(logfile_level=args['logfile_level'],
@@ -198,10 +210,12 @@ def main():
     # Create network.
     model = model_manager(args)
     model_name = model.get_name()
-    num_params = utils.count_parameters(model)
+    num_params_train, num = utils.count_parameters(model)
     if rank == 0:
-        Log.info('=> Number of trainable parameters: %d' % num_params)
-        open(os.path.join(exp_path, '%d_parameters' % num_params), 'a').close()
+        Log.info('=> Number of trainable parameters: %d' % num_params_train)
+        Log.info('=> Number of parameters: %d' % num)
+        open(os.path.join(exp_path, '%d_parameters_trainable' % num_params_train), 'a').close()
+        open(os.path.join(exp_path, '%d_parameters' % num), 'a').close()
 
     if args["net"]["sync_bn"] and args["distributed"]:
         model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
@@ -228,14 +242,7 @@ def main():
             mode = "val"
     else:
         mode = args["dataset"]["mode"]
-    train_loader, val_loader = get_loader(args, mode)
-
-    # AANet-style: have a mode only conduct evaluate
-    if args['evaluate_only']:
-        assert args['dataset']['val']['batch_size'] == 1
-        validate(model, val_loader, 1, args)
-        Log.info("Validation process down in")
-        exit(1)
+    train_loader, val_loader = get_loader(args, mode, args["seed"])
 
     # AAnet: Learning rate for offset learning is set 0.1 times those of existing layers
     specific_params = list(filter(specific_params_group, model.named_parameters()))
@@ -258,6 +265,9 @@ def main():
     pred = 0
     all_epoch = cfg_trainer['epochs']
     scheduler_metric = args['trainer']['lr_scheduler'].get('metric', 'epoch')
+    train_metric = args['trainer'].get('metric', 'epoch')
+    if train_metric == "iter":
+        args["save_ckpt_freq"] = args["save_ckpt_freq"] * len(train_loader)  # iter
 
     # auto_resume > pretrain
     if args['resume']:
@@ -266,6 +276,13 @@ def main():
     elif args["pretrained_net"] is not None:
         # usually for fine turning
         load_state(args["pretrained_net"], model)
+
+    # AANet-style: have a mode only conduct evaluate
+    if args['evaluate_only']:
+        assert args['dataset']['val']['batch_size'] == 1
+        validate(model, val_loader, 1, args, tb_logger, best_pred)
+        Log.info("Validation process down in")
+        exit(1)
 
     if not args['resume']:
         files = os.listdir(exp_path)
@@ -280,9 +297,11 @@ def main():
     scheduler = get_scheduler(cfg_trainer, optimizer, len(train_loader), last=last_epoch)
 
     # if not args['evaluate_only']:
-    for epoch in range(start_epoch, all_epoch):
-        train(model, optimizer, scheduler, loss, train_loader, epoch, args, scheduler_metric, tb_logger)
-        epoch = epoch + 1
+    epoch = start_epoch
+    for _ in range(start_epoch, all_epoch):
+        epoch = train(model, optimizer, scheduler, loss, train_loader, epoch, train_metric, args, scheduler_metric, tb_logger)
+        if train_metric == 'epoch':
+            epoch = epoch + 1
 
         if mode != 'noval':
             # validate cant be with rank=0. All_reduce may wait for response from the sub-process from all ranks
@@ -294,7 +313,7 @@ def main():
                 if pred < best_pred:
                     best_pred = pred
                     best_epoch = epoch
-                    save_checkpoint(args["exp_dir"], optimizer, model, -1, -1, best_pred, best_epoch, filename=filename)
+                    save_checkpoint(args["exp_dir"], optimizer, model, epoch, pred, best_pred, best_epoch, filename=filename)
 
                 if epoch == all_epoch:
                     val_file = os.path.join(args['exp_dir'], 'val_results.txt')
@@ -310,7 +329,7 @@ def main():
             save_checkpoint(args["exp_dir"], optimizer, model, epoch, pred, best_pred, best_epoch, filename=filename)
 
             if epoch % args["save_ckpt_freq"] == 0:
-                save_checkpoint(args["model_path"], optimizer, model, epoch, pred, best_pred, best_epoch, net_name=model_name)
+                save_checkpoint(args["model_path"], optimizer, model, epoch, pred, best_pred, best_epoch, save_optimizer=False, net_name=model_name)
 
         if scheduler_metric == 'epoch':
             base_lr = optimizer.param_groups[0]['lr']
@@ -319,8 +338,11 @@ def main():
 
             scheduler.step()
 
+        if epoch == all_epoch:
+            break
 
-def train(model, optimizer, lr_scheduler, stereo_loss, data_loader, epoch, args, scheduler_metric, tb_logger):
+
+def train(model, optimizer, lr_scheduler, stereo_loss, data_loader, epoch, train_metric, args, scheduler_metric, tb_logger):
     model.train()
     # stereo_loss.train()
     if args["freeze_bn"]:
@@ -334,19 +356,22 @@ def train(model, optimizer, lr_scheduler, stereo_loss, data_loader, epoch, args,
         data_loader.sampler.set_epoch(epoch)
     data_loader_iter = iter(data_loader)
 
-    if is_distributed():
-        rank, world_size = dist.get_rank(), dist.get_world_size()
-    else:
-        rank, world_size = 0, 1
+    rank = get_rank()
 
     # to screen
     total_iteration = len(data_loader)
-    total_epoch = args['trainer']['epochs']
+    total_epoch = args['trainer']['epochs']  # all epoch
     print_freq = args.get('print_freq', 100)
     summary_freq = args.get('summary_freq', 100)
     max_disp = args['dataset']['max_disparity']
+    train_metric = args['trainer'].get('metric', 'epoch')
+    if train_metric == "epoch":
+        pre_iter = epoch * total_iteration
+    elif train_metric == "iter":
+        pre_iter = epoch
 
     pseudo_gt = args['dataset']['train'].get('pseudo_gt', False)
+    slant = args['dataset']['train'].get('slant', False)
 
     # scaler = torch.cuda.amp.GradScaler()
 
@@ -360,32 +385,39 @@ def train(model, optimizer, lr_scheduler, stereo_loss, data_loader, epoch, args,
 
     for step in range(total_iteration):
         # torch.cuda.synchronize()
-        i_iter = epoch * total_iteration + step + 1
+        i_iter = pre_iter + step + 1
 
         data_start = time.time()
         sample = next(data_loader_iter)
 
         img_left = sample['left'].cuda()  # [B, 3, H, W]
         img_right = sample['right'].cuda()
-        gt_disp = sample['disp'].cuda()  # [B, H, W]
-        mask = (gt_disp > 0) & (gt_disp < max_disp)
+        gt_disp = sample['disp'].cuda()  # [B, H, W
 
-        if not mask.any():
-            continue
+        mask = (gt_disp > 1e-3) & (gt_disp < max_disp)# ]
 
         if pseudo_gt:
             pseudo_gt_disp = sample['pseudo_disp'].cuda()
         else:
             pseudo_gt_disp = None
 
+        if slant:
+            dxdy = sample["dxdy"].cuda()
+        else:
+            dxdy = None
+
         data_time.update(time.time() - data_start)
 
         forward_start = time.time()
-        with torch.cuda.amp.autocast():
-            preds = model(img_left, img_right)
+        # with torch.autograd.detect_anomaly():
+        # with torch.cuda.amp.autocast():
+        preds_dic = model(img_left, img_right)
         forward_time.update(time.time() - forward_start)
-        total_loss, disp_loss, pyramid_loss, pseudo_loss, pseudo_pyramid = stereo_loss(preds, gt_disp, mask, pseudo_gt_disp)
+        # assert not torch.any(torch.isnan(preds[-1]))
 
+        loss_dic = stereo_loss(preds_dic, gt_disp, dxygt=dxdy, pseudo_disp=pseudo_gt_disp,)
+
+        # assert not torch.any(torch.isnan(total_loss))
         """
         optimizer.zero_grad()
         scaler.scale(total_loss).backward()
@@ -393,9 +425,15 @@ def train(model, optimizer, lr_scheduler, stereo_loss, data_loader, epoch, args,
         scaler.update()
         """
 
+        total_loss = loss_dic["total_loss"]
+
         optimizer.zero_grad()
         total_loss.backward()
+        #  torch.isnan(model.module.mu).sum() == 0, print(model.module.mu)
         optimizer.step()
+
+        # assert torch.isnan(model.module.mu).sum() == 0, print(model.module.mu)
+        # assert torch.isnan(model.module.mu.grad).sum() == 0, print(model.module.mu.grad)
 
         """
         for name, param in model.named_parameters():
@@ -405,15 +443,14 @@ def train(model, optimizer, lr_scheduler, stereo_loss, data_loader, epoch, args,
 
         batch_time.update(time.time() - data_start)
 
-        # gather all loss from different gpus
-        reduced_total_loss = total_loss.clone().detach()
-        reduced_disp_loss = disp_loss.clone().detach()
-        if is_distributed():
-            dist.all_reduce(reduced_total_loss)  # dist.all_reduce(tensor, op=ReduceOp.SUM)
-            dist.all_reduce(reduced_disp_loss)
+        # get the disp loss
+        for name in loss_dic.keys():
+            if ("multi_preds" in name) and ("pyramid" not in name):
+                disp_loss = loss_dic[name]
 
-        reduced_total_loss = reduced_total_loss / world_size  # the same batch size at DDP?
-        reduced_disp_loss = reduced_disp_loss / world_size
+        # gather all loss from different gpus
+        reduced_total_loss = all_reduce_mean(total_loss)
+        reduced_disp_loss = all_reduce_mean(disp_loss)
         total_losses.update(reduced_total_loss)
         disp_losses.update(reduced_disp_loss)
 
@@ -435,6 +472,11 @@ def train(model, optimizer, lr_scheduler, stereo_loss, data_loader, epoch, args,
             )
 
         # EPE and error point count
+        # get the disp
+        for name in preds_dic.keys():
+            if ("preds" in name) and ("pyramid" in name):
+                preds = preds_dic[name]
+
         pred_disp = preds[-1]
         if pred_disp.size(-1) != gt_disp.size(-1):
             pred_disp = pred_disp.unsqueeze(1)  # [B, 1, H, W]
@@ -448,17 +490,11 @@ def train(model, optimizer, lr_scheduler, stereo_loss, data_loader, epoch, args,
         thres1 = thres_metric(pred_disp, gt_disp, mask, 1.0)
         thres2 = thres_metric(pred_disp, gt_disp, mask, 2.0)
         thres3 = thres_metric(pred_disp, gt_disp, mask, 3.0)
-        if is_distributed():
-            dist.all_reduce(epe)
-            dist.all_reduce(d1)
-            dist.all_reduce(thres1)
-            dist.all_reduce(thres2)
-            dist.all_reduce(thres3)
-        epe = epe / world_size
-        d1 = d1 / world_size
-        thres1 = thres1 / world_size
-        thres2 = thres2 / world_size
-        thres3 = thres3 / world_size
+        epe = all_reduce_mean(epe)
+        d1 = all_reduce_mean(d1)
+        thres1 = all_reduce_mean(thres1)
+        thres2 = all_reduce_mean(thres2)
+        thres3 = all_reduce_mean(thres3)
 
         # most related to the image summary
         if rank == 0 and (i_iter % summary_freq == 0):
@@ -485,18 +521,13 @@ def train(model, optimizer, lr_scheduler, stereo_loss, data_loader, epoch, args,
             tb_logger.add_scalar('train/d1', d1.item(), i_iter)
             tb_logger.add_scalar('train/disp_loss', disp_losses.avg, i_iter)
             if pseudo_gt:
-                tb_logger.add_scalar('train/pseudo_loss', pseudo_loss.item(), i_iter)
                 tb_logger.add_scalar('train/total_loss', total_losses.avg, i_iter)
-
-            # Save loss of different scale
-            for s in range(len(pyramid_loss)):
-                save_name = 'train/loss' + str(len(pyramid_loss) - s - 1)
-                save_value = pyramid_loss[s]
-                tb_logger.add_scalar(save_name, save_value, i_iter)
 
             tb_logger.add_scalar('train/thres1', thres1.item(), i_iter)
             tb_logger.add_scalar('train/thres2', thres2.item(), i_iter)
             tb_logger.add_scalar('train/thres3', thres3.item(), i_iter)
+
+            stereo_loss.loss_tb_logger(tb_logger, loss_dic, i_iter)
 
             disp_losses.reset()
             total_losses.reset()
@@ -506,14 +537,19 @@ def train(model, optimizer, lr_scheduler, stereo_loss, data_loader, epoch, args,
             # loss_time.reset()
             data_time.reset()
 
+        if train_metric == 'iter':
+            epoch = i_iter
+            if epoch >= total_epoch:
+                return epoch
+
         if scheduler_metric == 'iter':
             base_lr = optimizer.param_groups[0]['lr']
             tb_logger.add_scalar('base_lr', base_lr, i_iter)
-
             lr_scheduler.step()
 
-    # Always save the latest model for resuming training
+    return epoch
 
+    # Always save the latest model for resuming training
 
 def validate(model, data_loader, epoch, args, tb_logger, best_prec):
     model.eval()
@@ -525,10 +561,8 @@ def validate(model, data_loader, epoch, args, tb_logger, best_prec):
 
     validate_screen_freq = 5
 
-    if is_distributed():
-        rank, word_size = dist.get_rank(), dist.get_world_size()
-    else:
-        rank, word_size = 0, 1
+    rank = get_rank()
+    word_size = get_world_size()
 
     max_disp = args['dataset']['max_disparity']
 
@@ -565,7 +599,12 @@ def validate(model, data_loader, epoch, args, tb_logger, best_prec):
         num_imgs += gt_disp.size(0)
 
         with torch.no_grad():
-            pred_disp = model(img_left, img_right)[-1]  # [B, H, W]
+            pred_dic = model(img_left, img_right)  # not [B, H, W] but dist
+
+        # get the disp
+        for name in pred_dic.keys():
+            if ("preds" in name) and ("pyramid" in name):
+                pred_disp = pred_dic[name][-1]
 
         if pred_disp.size(-1) < gt_disp.size(-1):
             pred_disp = pred_disp.unsqueeze(1)  # [B, 1, H, W]
@@ -580,18 +619,11 @@ def validate(model, data_loader, epoch, args, tb_logger, best_prec):
         thres2 = thres_metric(pred_disp, gt_disp, mask, 2.0)
         thres3 = thres_metric(pred_disp, gt_disp, mask, 3.0)
 
-        if is_distributed():
-            dist.all_reduce(epe, op=dist.ReduceOp.SUM)
-            dist.all_reduce(d1)
-            dist.all_reduce(thres1)
-            dist.all_reduce(thres2)
-            dist.all_reduce(thres3)
-
-        epe = epe / word_size
-        d1 = d1 / word_size
-        thres1 = thres1 / word_size
-        thres2 = thres2 / word_size
-        thres3 = thres3 / word_size
+        epe = all_reduce_mean(epe)
+        d1 = all_reduce_mean(d1)
+        thres1 = all_reduce_mean(thres1)
+        thres2 = all_reduce_mean(thres2)
+        thres3 = all_reduce_mean(thres3)
 
         if rank == 0:
             # Sum operation when rank = 0
@@ -620,7 +652,6 @@ def validate(model, data_loader, epoch, args, tb_logger, best_prec):
         mean_d1 = val_d1 / valid_samples
         mean_thres1 = val_thres1 / valid_samples
         mean_thres2 = val_thres2 / valid_samples
-
         mean_thres3 = val_thres3 / valid_samples
         Log.info('=> Validation done!')
 

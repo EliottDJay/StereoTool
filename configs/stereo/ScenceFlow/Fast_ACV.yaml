@@ -83,25 +83,31 @@ trainer: # Required.
       gamma: 0.1
 
 net: # Required.
-  method: coex_original
-  sync_bn: True
+  sync_bn: Fasle
+  method: fastacv
   backbone:
     type: mobilenetv2_100
     channels: [16,24,32,96,160]
     layers: [1,2,3,5,6]
     pretrained: True
+  acv:
+    att_weights_only: True
+    coarse_topk: 24
   volume1:
     feature_similarity: groupcorrelation
-    group: 1
+    group: 12
+    norm: True
+  volume2:
+    feature_similarity: sparsecatvolume
+    group: 32
   regression:
     topk: 2
   refinement:
     type: spixel
-    spxc: [32, 48]
+    spxc: [32, 48, 32]
 
 loss:
   type: basicdisp
   weight: [0.3, 1]
   highest_only: False
   pseudo_gt: False
-

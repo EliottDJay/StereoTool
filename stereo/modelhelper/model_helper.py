@@ -2,6 +2,7 @@ import os
 import random
 from collections import OrderedDict
 from glob import glob
+from utils.logger import Logger as Log
 
 from utils.distributed import get_rank, get_world_size
 import torch
@@ -73,7 +74,7 @@ def load_state(path, model, optimizer=None, key="state_dict"):
 
     if os.path.isfile(path):
         if rank == 0:
-            print("=> loading checkpoint '{}'".format(path))
+            Log.info("=> loading checkpoint '{}'".format(path))
 
         checkpoint = torch.load(path, map_location=map_func)
 

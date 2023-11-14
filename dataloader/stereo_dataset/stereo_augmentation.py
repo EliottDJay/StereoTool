@@ -35,6 +35,10 @@ class ToTensor(object):
             disp = sample['pseudo_disp']  # [H, W]
             sample['pseudo_disp'] = torch.from_numpy(disp)
 
+        if 'dxdy' in sample.keys():
+            dxdy = sample['dxdy']  # [2, H, W]
+            sample['dxdy'] = torch.from_numpy(dxdy)
+
         return sample
 
 
@@ -72,24 +76,30 @@ class RandomCrop(object):
             assert top_pad >= 0 and right_pad >= 0
 
             sample['left'] = np.lib.pad(sample['left'],
-                                        ((top_pad//2, top_pad-top_pad//2), (right_pad - right_pad//2, right_pad//2), (0, 0)),
+                                        ((top_pad//2, top_pad-top_pad//2), (0, right_pad), (0, 0)),
                                         mode='constant',
                                         constant_values=0)
+            #  ((top_pad//2, top_pad-top_pad//2), (0, right_pad), (0, 0)),
             sample['right'] = np.lib.pad(sample['right'],
-                                         ((top_pad//2, top_pad-top_pad//2), (right_pad - right_pad//2, right_pad//2), (0, 0)),
+                                         ((top_pad//2, top_pad-top_pad//2), (0, right_pad), (0, 0)),
                                          mode='constant',
                                          constant_values=0)
             if 'disp' in sample.keys():
                 sample['disp'] = np.lib.pad(sample['disp'],
-                                            ((top_pad//2, top_pad-top_pad//2), (right_pad - right_pad//2, right_pad//2)),
+                                            ((top_pad//2, top_pad-top_pad//2), (0, right_pad)),
                                             mode='constant',
                                             constant_values=0)
 
             if 'pseudo_disp' in sample.keys():
                 sample['pseudo_disp'] = np.lib.pad(sample['pseudo_disp'],
-                                                   ((top_pad//2, top_pad-top_pad//2), (right_pad - right_pad//2, right_pad//2)),
+                                                   ((top_pad//2, top_pad-top_pad//2), (0, right_pad)),
                                                    mode='constant',
                                                    constant_values=0)
+            if 'dxdy' in sample.keys():
+                sample['dxdy'] = np.lib.pad(sample['dxdy'],
+                                            ((0, 0), (top_pad // 2, top_pad - top_pad // 2), (0, right_pad)),
+                                            mode='constant',
+                                            constant_values=0)
 
         else:
             assert self.img_height <= ori_height and self.img_width <= ori_width
@@ -115,6 +125,19 @@ class RandomCrop(object):
                 sample['disp'] = self.crop_img(sample['disp'])
             if 'pseudo_disp' in sample.keys():
                 sample['pseudo_disp'] = self.crop_img(sample['pseudo_disp'])
+            if 'dxdy' in sample.keys():
+                dxdy = np.copy(sample['dxdy'])
+                shape = dxdy.shape
+                if shape[0] == 2:
+                    dxdy = dxdy.transpose(1, 2, 0)
+                    dxdy = self.crop_img(dxdy)
+                    dxdy = dxdy.transpose(2, 0, 1)
+                elif shape[2] == 2:
+                    pass
+                else:
+                    Log.error("the ground truth of the slant dont match the project!")
+                    exit(1)
+                sample['dxdy'] = dxdy
 
         return sample
 
@@ -135,6 +158,9 @@ class RandomVerticalFlip(object):
             sample['right'] = np.copy(np.flipud(sample['right']))
 
             sample['disp'] = np.copy(np.flipud(sample['disp']))
+
+            if 'dxdy' in sample.keys():
+                sample['dxdy'] = np.copy(np.flipud(sample['disp']))
 
             if 'pseudo_disp' in sample.keys():
                 sample['pseudo_disp'] = np.copy(np.flipud(sample['pseudo_disp']))
@@ -213,13 +239,11 @@ class RandomGamma(object):
                 sample['left'] = F.adjust_gamma(sample['left'], gamma)
                 sample['right'] = F.adjust_gamma(sample['right'], gamma)
 
-
         return sample
 
 
 class RandomBrightness(object):
-
-    def __init__(self, p_op=1, p_diff=0.5):
+    def __init__(self, p_op=1, p_diff=0.5, set_min=None, set_max=None):
         """
 
         :param p_op: conduct the operation
@@ -227,16 +251,24 @@ class RandomBrightness(object):
         """
         self.p_op = p_op
         self.p_diff = p_diff
+        if set_min is None:
+            self.set_min = 0.5
+        else:
+            self.set_min = set_min
+        if set_max is None:
+            self.set_max = 2.0
+        else:
+            self.set_max = set_max
 
     def __call__(self, sample):
         if np.random.random() < self.p_op:
             if np.random.random() < self.p_diff:
-                brightness = np.random.uniform(0.5, 2.0, 2)
+                brightness = np.random.uniform(self.set_min, self.set_max, 2)
 
                 sample['left'] = F.adjust_brightness(sample['left'], brightness[0])
                 sample['right'] = F.adjust_brightness(sample['right'], brightness[1])
             else:
-                brightness = np.random.uniform(0.5, 2.0)
+                brightness = np.random.uniform(self.set_min, self.set_max)
 
                 sample['left'] = F.adjust_brightness(sample['left'], brightness)
                 sample['right'] = F.adjust_brightness(sample['right'], brightness)
@@ -310,7 +342,10 @@ class RandomColor(object):
             self.transform.append(RandomGamma(p_op=color_cfg['gamma']['p_op'], p_diff=color_cfg['gamma']['p_diff']))
             Log.info("RandomGamma append")
         if color_cfg.get('brightness', False):
-            self.transform.append(RandomBrightness(p_op=color_cfg['brightness']['p_op'], p_diff=color_cfg['brightness']['p_diff']))
+            set_min = color_cfg['brightness'].get('min', None)
+            set_max = color_cfg['brightness'].get('max', None)
+            self.transform.append(RandomBrightness(p_op=color_cfg['brightness']['p_op'], p_diff=color_cfg['brightness']['p_diff'],
+                                                   set_min=set_min, set_max=set_max))
             Log.info("RandomBrightness append")
         if color_cfg.get('hue', False):
             self.transform.append(RandomHue(p_op=color_cfg['hue']['p_op'], p_diff=color_cfg['hue']['p_diff']))
@@ -402,12 +437,37 @@ class RGBShift(object):
 
 class Occlude(object):
 
+    def __init__(self, p=0.5):
+        self.p = p
+
     def __call__(self, sample):
-        if np.random.random() < 0.5:
+        if np.random.random() < self.p:
             sx = int(np.random.uniform(35, 100))
             sy = int(np.random.uniform(25, 75))
             cx = int(np.random.uniform(sx, sample['right'].shape[0] - sx))
             cy = int(np.random.uniform(sy, sample['right'].shape[1] - sy))
             sample['right'][cx-sx:cx+sx, cy-sy:cy+sy] = np.mean(np.mean(sample['right'], 0), 0)[np.newaxis, np.newaxis]
+
+        return sample
+
+
+class ShiftRight(object):
+    def __init__(self, cfg):
+        prob = cfg.get('p', 0.5)
+        self.h_size = cfg.get('h', [50, 180])
+        self.w_size = cfg.get('w', [50, 250])
+        self.p = prob
+
+    def __call__(self, sample):
+        if np.random.random() < self.p:
+            size_h = int(np.random.uniform(self.h_size[0], self.h_size[1]))
+            size_w = int(np.random.uniform(self.w_size[0], self.w_size[1]))
+
+            x1 = int(np.random.uniform(0, sample['right'].shape[1] - size_w))
+            x2 = int(np.random.uniform(0, sample['right'].shape[1] - size_w))
+            y1 = int(np.random.uniform(0, sample['right'].shape[0] - size_h))
+            y2 = int(np.random.uniform(0, sample['right'].shape[0] - size_h))
+            right = np.copy(sample['right'])
+            sample['right'][y1:y1+size_h, x1:x1+size_w] = right[y2:y2+size_h, x2:x2+size_w]
 
         return sample

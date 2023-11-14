@@ -94,3 +94,4 @@ def normed_groupwise_correlation(fea1, fea2, groups, cpg):
 def normed_correlation(fea1, fea2):
     cost = torch.mean(((fea1/(torch.norm(fea1, 2, 1, True)+1e-05)) * (fea2/(torch.norm(fea2, 2, 1, True)+1e-05))), dim=1, keepdim=True)
     return cost
+

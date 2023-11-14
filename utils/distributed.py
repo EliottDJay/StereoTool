@@ -10,10 +10,12 @@ from utils.logger import Logger as Log
 def is_distributed():
     return torch.distributed.is_initialized()
 
+
 def get_world_size():
     if not torch.distributed.is_initialized():
         return 1
     return torch.distributed.get_world_size()
+
 
 def get_rank():
     if not torch.distributed.is_initialized():
@@ -24,6 +26,16 @@ def all_reduce_numpy(array):
     tensor = torch.from_numpy(array).cuda()
     torch.distributed.all_reduce(tensor)
     return tensor.cpu().numpy()
+
+
+def all_reduce_mean(tensor):
+    tensor = tensor.clone().detach()
+    if is_distributed():
+        dist.all_reduce(tensor, op=dist.ReduceOp.SUM)
+        wordsize = get_world_size()
+        tensor = tensor/wordsize
+
+    return tensor
 
 # U2PL
 def setup_distributed(backend="nccl", port=None):

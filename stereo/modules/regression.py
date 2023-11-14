@@ -36,3 +36,15 @@ def regression_topk(volume, k, maxdisp):
     disp_4 = torch.sum(corr * disp, 1, keepdim=False)
 
     return disp_4
+
+
+def regression_topk_sparse(volume, k, disparity_samples):
+
+    _, ind = volume.sort(1, True)
+    pool_ind = ind[:, :k]
+    cost = torch.gather(volume, 1, pool_ind)
+    prob = F.softmax(cost, 1)
+    disparity_samples = torch.gather(disparity_samples, 1, pool_ind)
+    pred = torch.sum(disparity_samples * prob, dim=1, keepdim=False)
+
+    return pred

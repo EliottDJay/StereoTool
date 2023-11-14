@@ -2,6 +2,8 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
+from utils.logger import Logger as Log
+
 import numpy as np
 import re
 from PIL import Image
@@ -111,7 +113,11 @@ def _read_kitti_disp(filename):
     return depth
 
 
-def _read_disp_png(filename, scale_factor):
+def _read_disp_png(filename, scale_factor=128.):
+    if isinstance(scale_factor, str):
+        Log.error("scale_factor cant be a str, there must be sth wrong")
+        exit(1)
+        scale_factor = 128.0
     depth = np.array(Image.open(filename))
     depth = depth.astype(np.float32) / scale_factor
     return depth
