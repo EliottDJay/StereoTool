@@ -137,7 +137,8 @@ def build_transfrom(cfg, mean, std, stage="train"):
         shift_cfg = cfg['rightshift']
         transform.append(stereo_augmentation.ShiftRight(shift_cfg))
     if cfg.get('occlude', False):
-        transform.append(stereo_augmentation.Occlude())
+        occlude_cfg = cfg['occlude']
+        transform.append(stereo_augmentation.Occlude(occlude_cfg))
         Log.info("Using Occlude Transfomer to {} dataset".format(stage))
     if cfg.get('vflip', False):
         transform.append(stereo_augmentation.RandomVerticalFlip(cfg["vflip"]["p"]))

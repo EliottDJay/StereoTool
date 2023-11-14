@@ -437,13 +437,15 @@ class RGBShift(object):
 
 class Occlude(object):
 
-    def __init__(self, p=0.5):
-        self.p = p
+    def __init__(self, cfg):
+        self.p = cfg.get('p', 0.5)
+        self.h_size = cfg.get('h', [35, 100])
+        self.w_size = cfg.get('w', [25, 75])
 
     def __call__(self, sample):
         if np.random.random() < self.p:
-            sx = int(np.random.uniform(35, 100))
-            sy = int(np.random.uniform(25, 75))
+            sx = int(np.random.uniform(self.h_size[0], self.h_size[1]))
+            sy = int(np.random.uniform(self.w_size[0], self.w_size[1]))
             cx = int(np.random.uniform(sx, sample['right'].shape[0] - sx))
             cy = int(np.random.uniform(sy, sample['right'].shape[1] - sy))
             sample['right'][cx-sx:cx+sx, cy-sy:cy+sy] = np.mean(np.mean(sample['right'], 0), 0)[np.newaxis, np.newaxis]

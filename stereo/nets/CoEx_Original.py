@@ -116,7 +116,9 @@ class CoEx_Original(nn.Module):
         # dont forget *4
 
         # we should keep sure that output is all list or dir
-        return disp_pred
+        return {
+                    "preds_pyramid": disp_pred
+                }
 
     # @staticmethod
     def get_name(self):
